@@ -1,0 +1,278 @@
+substitutions:
+  devicename: petkit_fresh_solo
+  friendly_name: PetKit Fresh Element Solo
+
+esphome:
+  name: ${devicename}
+  comment: Автоматическая кормушка PetKit Fresh Element Solo
+  on_boot:
+    then:
+    - rtttl.play: "mario:d=4,o=5,b=100:16e6,16e6,32p,8e6,16c6,8e6,8g6,8p,8g,8p,8c6,16p,8g,16p,8e,16p,8a,8b,16a#,8a,16g.,16e6,16g6,8a6,16f6,8g6,8e6,16c6,16d6,8b,16p,8c6,16p,8g,16p,8e,16p,8a,8b,16a#,8a,16g.,16e6,16g6,8a6,16f6,8g6,8e6,16c6,16d6,8b,8p,16g6,16f#6,16f6,16d#6,16p,16e6,16p,16g#,16a,16c6,16p,16a,16c6,16d6,8p,16g6,16f#6,16f6,16d#6,16p,16e6,16p,16c7,16p,16c7,16c7,p,16g6,16f#6,16f6,16d#6,16p,16e6,16p,16g#,16a,16c6,16p,16a,16c6,16d6,8p,16d#6,8p,16d6,8p,16c6"
+    - output.turn_on: optocoupler # активируем оптопары двигателя и подачи корма
+#      # считайте время RTC один раз при загрузке системы
+#      pcf85063.read_time:
+
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Включение ведения журнала
+logger:
+
+# Включим API Home Assistant
+api:
+  encryption:
+    key: !secret key
+
+# Включим компонент обновления OTA (по воздуху)
+ota:
+  password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: LIGHT # Установка мощности сигнала WI-FI
+
+  # Включение резервной точки доступа (captive portal) в случае сбоя подключения Wi-Fi
+  ap:
+    ssid: ${devicename}
+    password: !secret ap_password
+
+# Включим на всякий случай WEB сервер, если он нужен
+web_server:
+  port: 80
+
+captive_portal:
+
+
+#########################################################################
+#                                                                       #
+#                                 Сенсоры                               #
+#                                                                       #
+#########################################################################
+sensor:
+  # Сенсор работы UPTIME
+  - platform: uptime
+    id: uptime_s
+
+  # Выводим время в сенсор с сервера Home Assistant
+#  - platform: homeassistant
+#    id: esptime
+#    entity_id: sensor.time
+
+  # Сенсор wi-fi сигнала в dB
+  - platform: wifi_signal # Сообщает уровень сигнала Wi-Fi/RSSI в дБ
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"
+
+  # Сенсор wi-fi сигнала в %
+  - platform: copy # Сообщает об уровне сигнала Wi-Fi в %
+    source_id: wifi_signal_db
+    name: "WiFi Signal Percent"
+    icon: mdi:wifi
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "Signal %"
+    entity_category: "diagnostic"
+
+#########################################################################
+#                                                                       #
+#                           Текстовые сенсоры                           #
+#                                                                       #
+#########################################################################
+text_sensor:
+  - platform: template
+    name: "Uptime"
+    lambda: |-
+      uint32_t dur = id(uptime_s).state;
+      int dys = 0;
+      int hrs = 0;
+      int mnts = 0;
+      if (dur > 86399) {
+        dys = trunc(dur / 86400);
+        dur = dur - (dys * 86400);
+      }
+      if (dur > 3599) {
+        hrs = trunc(dur / 3600);
+        dur = dur - (hrs * 3600);
+      }
+      if (dur > 59) {
+        mnts = trunc(dur / 60);
+        dur = dur - (mnts * 60);
+      }
+      char buffer[17];
+      sprintf(buffer, "%ud %02uh %02um %02us", dys, hrs, mnts, dur);
+      return {buffer};
+    icon: mdi:clock-start
+    update_interval: 15s
+    entity_category: "diagnostic"
+    
+#########################################################################
+#                                                                       #
+#                            Бинарные сенсоры                           #
+#                                                                       #
+#########################################################################
+binary_sensor:
+  # Кнопка ручной подачи корма
+  - platform: gpio
+    name: "Кнопка ручной подачи"
+    pin:
+      number: 34
+      inverted: True
+    id: manual_feed_button
+    on_click:
+      min_length: 500ms
+      max_length: 2000ms
+      then:
+#        - output.turn_on: optocoupler
+        - output.turn_on: nSleep
+        - output.turn_on: AIN2
+        - rtttl.play: "two short:d=4,o=5,b=100:16e6,16e6"
+
+  # Кнопка сопряжения возле LED индикации
+  - platform: gpio
+    name: "Кнопка сопряжения"
+    pin:
+      number: 0
+      inverted: True
+    id: Pairing_button
+
+  # Оптопара электродвигателя
+  - platform: gpio
+    name: "Оптопара двигателя"
+    pin:
+      number: 27
+    id: binary_engine_optocoupler
+    on_press:
+      then:
+      - output.turn_off: nSleep
+      - output.turn_off: AIN2
+#      - output.turn_off: optocoupler
+
+  # Оптопара подачи корма
+  - platform: gpio
+    name: "Оптопара подачи корма"
+    pin: 
+      number: 14
+    id: feed_feed_optocoupler
+
+
+
+#########################################################################
+#                                                                       #
+#                           Переключатели                               #
+#                                                                       #
+#########################################################################
+switch:
+  # Перезагрузка устройства
+  - platform: restart
+    name: "Restart"
+
+  - platform: template
+    name: "start_food_cat"
+    icon: mdi:cat
+    lambda: |-
+      if (id(manual_feed_button).state) {
+        return true;
+      } else {
+        return false;
+      }
+    turn_on_action:
+    - output.turn_on: optocoupler
+    - output.turn_on: nSleep
+    - output.turn_on: AIN2
+    turn_off_action:
+    - output.turn_off: nSleep
+    - output.turn_off: AIN2
+    - output.turn_off: optocoupler
+
+  # Обычный ход (подача едининцы на вход AIN2/BIN2 микросхемы
+  # двигателя FT-49OGM500-400K G2053. При этом должна подаваться единица
+  # на GPIO19 /это вывод nSleep той же микрухи)
+  - platform: output
+    name: "The usual move"
+    output: AIN2
+    disabled_by_default: True
+
+  # Реверс двигателя (подача едининцы на вход AIN1/BIN1 микросхемы
+  # двигателя FT-49OGM500-400K G2053. При этом должна подаваться единица
+  # на GPIO19 /это вывод nSleep той же микрухи)
+  - platform: output
+    name: "Engine reverse"
+    output: AIN1
+    disabled_by_default: True
+    
+  # Высокий логический уровень для включения устройства; 
+  # низкий логический уровень для входа в режим сна с низким энергопотреблением; 
+  - platform: output
+    name: "Enabling the driver"
+    output: nSleep
+    disabled_by_default: True
+
+  # Высокий логический уровень для активации оптопары двигателя и корма; 
+  # низкий логический уровень для её отключения; 
+  - platform: output
+    name: "Turning on the optocoupler"
+    output: optocoupler
+    disabled_by_default: True
+
+#########################################################################
+#                                                                       #
+#     Выходы (Это компонент вывода и не будет виден из интерфейса)      #
+#                                                                       #
+#########################################################################
+output:
+  # Пьезоизлучатель на 16 pin
+  - platform: ledc
+    pin:
+      number: 16
+    id: rtttl_out
+
+  # Обычный ход (подача едининцы на вход AIN2/BIN2 микросхемы
+  # двигателя FT-49OGM500-400K G2053. При этом должна подаваться единица
+  # на GPIO19 /это вывод nSleep той же микрухи)
+  - platform: gpio
+    pin:
+      number: 18
+    id: AIN2
+
+  # Реверс двигателя (подача едининцы на вход AIN1/BIN1 микросхемы
+  # двигателя FT-49OGM500-400K G2053. При этом должна подаваться единица
+  # на GPIO19 /это вывод nSleep той же микрухи)
+  - platform: gpio
+    pin:
+      number: 17
+    id: AIN1
+
+  # Высокий логический уровень для включения устройства; 
+  # низкий логический уровень для входа в режим сна с низким энергопотреблением; 
+  - platform: gpio
+    pin:
+      number: 19
+    id: nSleep
+
+  # Высокий логический уровень для активации оптопары двигателя и корма; 
+  # низкий логический уровень для её отключения; 
+  - platform: gpio
+    pin:
+      number: 33
+    id: optocoupler
+
+rtttl:
+  output: rtttl_out
+
+#########################################################################
+#                                                                       #
+#  LED возле скрытой кнопки сопряжения (показывает статусы устройства)  #
+#                                                                       #
+#########################################################################
+light:
+  - platform: status_led
+    pin:
+      number: 5
+    name: "Status_LED"
+
